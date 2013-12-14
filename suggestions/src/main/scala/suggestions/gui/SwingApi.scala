@@ -2,14 +2,16 @@ package suggestions
 package gui
 
 import scala.language.reflectiveCalls
-import scala.collection.mutable.ListBuffer
-import scala.collection.JavaConverters._
-import scala.concurrent._
-import scala.concurrent.ExecutionContext.Implicits.global
-import scala.util.{ Try, Success, Failure }
+//import scala.collection.mutable.ListBuffer
+//import scala.collection.JavaConverters._
+//import scala.concurrent._
+//import scala.concurrent.ExecutionContext.Implicits.global
+//import scala.util.{ Try, Success, Failure }
 import scala.swing.Reactions.Reaction
 import scala.swing.event.Event
-import rx.lang.scala.Observable
+import rx.lang.scala.{Observer, Observable}
+import rx.lang.scala.subscriptions.Subscription
+import rx.lang.scala.Subscription
 
 /** Basic facilities for dealing with Swing-like components.
 *
@@ -51,7 +53,28 @@ trait SwingApi {
       * @param field the text field
       * @return an observable with a stream of text field updates
       */
-    def textValues: Observable[String] = ???
+//    def textValues: Observable[String] = {
+//      def x(observer: Observer[String]): Subscription = {
+//        val r = Reaction {
+//          case ValueChanged => println("textValues, got ValueChanged"); observer.onNext(field.text)
+//        }
+//        field.subscribe(r)
+//        Subscription {
+//          field.unsubscribe(r)
+//        }
+//      }
+//      Observable[String](x)
+//    }
+    def textValues: Observable[String] = Observable[String](
+      (observer: Observer[String]) => {
+        val r = Reaction {
+          case ValueChanged => println("textValues, got ValueChanged"); observer.onNext(field.text)
+        }
+        field.subscribe(r)
+        Subscription {
+          field.unsubscribe(r)
+        }
+      })
 
   }
 
@@ -62,8 +85,16 @@ trait SwingApi {
      * @param field the button
      * @return an observable with a stream of buttons that have been clicked
      */
-    def clicks: Observable[Button] = ???
-
+    def clicks: Observable[Button] = Observable[Button](
+      (observer: Observer[Button]) => {
+        val r = Reaction {
+          case ButtonClicked => println("clicks, got ButtonClicked"); observer.onNext(button)
+        }
+        button.subscribe(r)
+        Subscription {
+          button.unsubscribe(r)
+        }
+      })
   }
 
 }

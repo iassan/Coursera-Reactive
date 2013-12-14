@@ -9,9 +9,11 @@ import scala.concurrent.duration._
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.util.{ Try, Success, Failure }
 import rx.subscriptions.CompositeSubscription
-import rx.lang.scala.Observable
+import rx.lang.scala.{Notification, Observable, Observer}
 import observablex._
 import search._
+import rx.lang.scala.subjects.PublishSubject
+import rx.lang.scala.Notification.{OnCompleted, OnError, OnNext}
 
 trait WikipediaApi {
 
@@ -37,7 +39,7 @@ trait WikipediaApi {
      *
      * E.g. `"erik", "erik meijer", "martin` should become `"erik", "erik_meijer", "martin"`
      */
-    def sanitized: Observable[String] = ???
+    def sanitized: Observable[String] = obs.map(_.replaceAll(" ", "_"))
 
   }
 
@@ -48,7 +50,18 @@ trait WikipediaApi {
      *
      * E.g. `1, 2, 3, !Exception!` should become `Success(1), Success(2), Success(3), Failure(Exception), !TerminateStream!`
      */
-    def recovered: Observable[Try[T]] = ???
+    def recovered: Observable[Try[T]] = {
+      def m(n: Notification[T]): Observable[Try[T]] = {
+        val s = PublishSubject[Try[T]](null.asInstanceOf[Try[T]])
+        n match {
+          case OnNext(v) => println(v); s.onNext(Success(v))
+          case OnError(e) => println(e); s.onNext(Failure(e)); s.onCompleted()
+          case OnCompleted(_) => println("completed"); s.onCompleted()
+        }
+        s
+      }
+      obs.materialize.flatMap(m)
+    }
 
     /** Emits the events from the `obs` observable, until `totalSec` seconds have elapsed.
      *
@@ -56,7 +69,15 @@ trait WikipediaApi {
      *
      * Note: uses the existing combinators on observables.
      */
-    def timedOut(totalSec: Long): Observable[T] = ???
+    def timedOut(totalSec: Long): Observable[T] = {
+      val s = PublishSubject[T](null.asInstanceOf[T])
+      Future {
+        Thread.sleep(totalSec * 1000)
+        s.onCompleted()
+      }
+      obs subscribe s
+      s
+    }
 
 
     /** Given a stream of events `obs` and a method `requestMethod` to map a request `T` into
@@ -84,7 +105,14 @@ trait WikipediaApi {
      *
      * Observable(Success(1), Succeess(1), Succeess(1), Succeess(2), Succeess(2), Succeess(2), Succeess(3), Succeess(3), Succeess(3))
      */
-    def concatRecovered[S](requestMethod: T => Observable[S]): Observable[Try[S]] = ???
+    def concatRecovered[S](requestMethod: T => Observable[S]): Observable[Try[S]] = obs.map(requestMethod(_).recovered).concat
+//      def f(t: T): Observable[Try[S]] = {
+//        val s = PublishSubject[S](null.asInstanceOf[S])
+//
+//        requestMethod(t) subs
+//      }
+//      obs.flatMap(f)
+//    }
 
   }
 

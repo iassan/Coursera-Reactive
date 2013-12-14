@@ -13,6 +13,8 @@ import gui._
 
 import org.junit.runner.RunWith
 import org.scalatest.junit.JUnitRunner
+import rx.lang.scala.subjects.PublishSubject
+import scala.Int
 
 
 @RunWith(classOf[JUnitRunner])
@@ -55,6 +57,7 @@ class WikipediaApiTest extends FunSuite {
     val requests = Observable(1, 2, 3)
     val remoteComputation = (n: Int) => Observable(0 to n)
     val responses = requests concatRecovered remoteComputation
+    responses.map(x => println(x))
     val sum = responses.foldLeft(0) { (acc, tn) =>
       tn match {
         case Success(n) => acc + n
@@ -63,8 +66,13 @@ class WikipediaApiTest extends FunSuite {
     }
     var total = -1
     val sub = sum.subscribe {
-      s => total = s
+      s => println(s"sum: $s"); total = s
     }
     assert(total == (1 + 1 + 2 + 1 + 2 + 3), s"Sum: $total")
   }
+
+//  test("WikipediaApi should properly enable Observables to recover") {
+//    val request = Observable(1, 2, 3) ++ Observable(new Exception)
+//    //val res = request.recovered
+//  }
 }
