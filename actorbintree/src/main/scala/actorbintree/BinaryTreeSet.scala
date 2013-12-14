@@ -43,7 +43,7 @@ object BinaryTreeSet {
     * `result` is true if and only if the element is present in the tree.
     */
   case class ContainsResult(id: Int, result: Boolean) extends OperationReply
-  
+
   /** Message to signal successful completion of an insert or remove operation. */
   case class OperationFinished(id: Int) extends OperationReply
 
@@ -52,7 +52,6 @@ object BinaryTreeSet {
 
 class BinaryTreeSet extends Actor {
   import BinaryTreeSet._
-  import BinaryTreeNode._
 
   def createRoot: ActorRef = context.actorOf(BinaryTreeNode.props(0, initiallyRemoved = true))
 
@@ -66,7 +65,10 @@ class BinaryTreeSet extends Actor {
 
   // optional
   /** Accepts `Operation` and `GC` messages. */
-  val normal: Receive = { case _ => ??? }
+  val normal: Receive = {
+    case Contains(requester, id, elem) => root ! new Contains(requester, id, elem)
+    case Insert(requester, id, elem) => root ! new Insert(requester, id, elem)
+  }
 
   // optional
   /** Handles messages while garbage collection is performed.
@@ -86,7 +88,7 @@ object BinaryTreeNode {
   case class CopyTo(treeNode: ActorRef)
   case object CopyFinished
 
-  def props(elem: Int, initiallyRemoved: Boolean) = Props(classOf[BinaryTreeNode],  elem, initiallyRemoved)
+  def props(elem: Int, initiallyRemoved: Boolean) = Props(classOf[BinaryTreeNode], elem, initiallyRemoved)
 }
 
 class BinaryTreeNode(val elem: Int, initiallyRemoved: Boolean) extends Actor {
@@ -101,7 +103,48 @@ class BinaryTreeNode(val elem: Int, initiallyRemoved: Boolean) extends Actor {
 
   // optional
   /** Handles `Operation` messages and `CopyTo` requests. */
-  val normal: Receive = { case _ => ??? }
+  val normal: Receive = {
+    case Contains(requester, id, lookupElem) => contains(requester, id, lookupElem)
+    case Insert(requester, id, newElem) => insert(requester, id, newElem)
+  }
+
+  private def contains(requester: ActorRef, id: Int, lookupElem: Int): Unit = {
+    if (lookupElem == elem)
+      requester ! new ContainsResult(id, true)
+    else {
+      if (lookupElem > elem) {
+        if (subtrees.contains(Right))
+          subtrees(Right) ! new Contains(requester, id, lookupElem)
+        else
+          requester ! new ContainsResult(id, false)
+      } else {
+        if (subtrees.contains(Left))
+          subtrees(Left) ! new Contains(requester, id, lookupElem)
+        else
+          requester ! new ContainsResult(id, false)
+      }
+    }
+  }
+
+  private def insert(requester: ActorRef, id: Int, newElem: Int): Unit = {
+    if (newElem > elem) {
+      if (subtrees.contains(Right))
+        subtrees(Right) ! insert(requester, id, newElem)
+      else {
+        val right = context.actorOf(props(newElem, initiallyRemoved = false))
+        subtrees = subtrees.updated(Right, right)
+        requester ! new OperationFinished(id)
+      }
+    } else {
+      if (subtrees.contains(Left))
+        subtrees(Left) ! insert(requester, id, newElem)
+      else {
+        val left = context.actorOf(props(newElem, initiallyRemoved = false))
+        subtrees = subtrees.updated(Left, left)
+        requester ! new OperationFinished(id)
+      }
+    }
+  }
 
   // optional
   /** `expected` is the set of ActorRefs whose replies we are waiting for,

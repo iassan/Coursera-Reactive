@@ -1,0 +1,7 @@
+build.sbt
+.project
+.classpath
+.idea*
+.settings
+lib_managed
+project
