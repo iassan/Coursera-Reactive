@@ -71,16 +71,16 @@ class BinaryTreeSet extends Actor with ActorLogging {
   /** Accepts `Operation` and `GC` messages. */
   val normal: Receive = {
     case Contains(requester, id, elem) =>
-      //log.info(s"Got contains message, id: $id, elem: $elem")
+      log.info(s"Got contains message, id: $id, elem: $elem")
       root ! new Contains(requester, id, elem)
     case Insert(requester, id, elem) =>
-      //log.info(s"Got insert message, id: $id, elem: $elem")
+      log.info(s"Got insert message, id: $id, elem: $elem")
       root ! new Insert(requester, id, elem)
     case Remove(requester, id, elem) =>
-      //log.info(s"Got remove message, id: $id, elem: $elem")
+      log.info(s"Got remove message, id: $id, elem: $elem")
       root ! new Remove(requester, id, elem)
     case GC =>
-      //log.warning("Got GC message")
+      log.warning("Got GC message")
       val newRoot = createRoot
       root ! new CopyTo(newRoot)
       context.become(garbageCollecting(newRoot), discardOld = true)
@@ -194,28 +194,32 @@ class BinaryTreeNode(val elem: Int, initiallyRemoved: Boolean) extends Actor wit
   }
 
   private def insert(requester: ActorRef, id: Int, newElem: Int): Unit = {
-    // do we need to care about new element being equal to an existing one?
-    if (newElem == elem && removed) {
-      removed = false
-      requester ! new OperationFinished(id)
-    }
-    if (newElem > elem) {
-      if (subtrees.contains(Right))
-        subtrees(Right) ! new Insert(requester, id, newElem)
-      else {
-        val right = context.actorOf(props(newElem, initiallyRemoved = false))
-        subtrees = subtrees.updated(Right, right)
-        //log.info(s"Created new node for insert, id: $id, newElem: $newElem, name: ${right.path}")
-        requester ! new OperationFinished(id)
+    if (newElem == elem) {
+      if (removed) {
+        removed = false
+        //requester ! new OperationFinished(id)
       }
+      // we're confirming something which didn't happen, is that right?
+      requester ! new OperationFinished(id)
     } else {
-      if (subtrees.contains(Left))
-        subtrees(Left) ! new Insert(requester, id, newElem)
-      else {
-        val left = context.actorOf(props(newElem, initiallyRemoved = false))
-        subtrees = subtrees.updated(Left, left)
-        //log.info(s"Created new node for insert, id: $id, newElem: $newElem, name: ${left.path}")
-        requester ! new OperationFinished(id)
+      if (newElem > elem) {
+        if (subtrees.contains(Right))
+          subtrees(Right) ! new Insert(requester, id, newElem)
+        else {
+          val right = context.actorOf(props(newElem, initiallyRemoved = false))
+          subtrees = subtrees.updated(Right, right)
+          //log.info(s"Created new node for insert, id: $id, newElem: $newElem, name: ${right.path}")
+          requester ! new OperationFinished(id)
+        }
+      } else {
+        if (subtrees.contains(Left))
+          subtrees(Left) ! new Insert(requester, id, newElem)
+        else {
+          val left = context.actorOf(props(newElem, initiallyRemoved = false))
+          subtrees = subtrees.updated(Left, left)
+          //log.info(s"Created new node for insert, id: $id, newElem: $newElem, name: ${left.path}")
+          requester ! new OperationFinished(id)
+        }
       }
     }
   }
