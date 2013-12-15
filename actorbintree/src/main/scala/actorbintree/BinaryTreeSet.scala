@@ -71,16 +71,16 @@ class BinaryTreeSet extends Actor with ActorLogging {
   /** Accepts `Operation` and `GC` messages. */
   val normal: Receive = {
     case Contains(requester, id, elem) =>
-      log.info(s"Got contains message, id: $id, elem: $elem")
+      //log.info(s"Got contains message, id: $id, elem: $elem")
       root ! new Contains(requester, id, elem)
     case Insert(requester, id, elem) =>
-      log.info(s"Got insert message, id: $id, elem: $elem")
+      //log.info(s"Got insert message, id: $id, elem: $elem")
       root ! new Insert(requester, id, elem)
     case Remove(requester, id, elem) =>
-      log.info(s"Got remove message, id: $id, elem: $elem")
+      //log.info(s"Got remove message, id: $id, elem: $elem")
       root ! new Remove(requester, id, elem)
     case GC =>
-      log.warning("Got GC message")
+      //log.warning("Got GC message")
       val newRoot = createRoot
       root ! new CopyTo(newRoot)
       context.become(garbageCollecting(newRoot), discardOld = true)
@@ -92,7 +92,7 @@ class BinaryTreeSet extends Actor with ActorLogging {
     * all non-removed elements into.
     */
   def garbageCollecting(newRoot: ActorRef): Receive = {
-    case GC => // ignore
+    case GC => // ignore - not really, I should enqueue it, but how?
     case Contains(requester, id, elem) => enqueueOperation(new Contains(requester, id, elem))
     case Insert(requester, id, elem) => enqueueOperation(new Insert(requester, id, elem))
     case Remove(requester, id, elem) => enqueueOperation(new Remove(requester, id, elem))
@@ -102,7 +102,7 @@ class BinaryTreeSet extends Actor with ActorLogging {
       root = newRoot
       for (operation <- pendingQueue) {
         //log.info(s"Dequeueing operation, id: ${operation.id}, elem: ${operation.elem}")
-        self ! operation
+        root ! operation
       }
       pendingQueue = Queue.empty[Operation]
       context.become(normal)
