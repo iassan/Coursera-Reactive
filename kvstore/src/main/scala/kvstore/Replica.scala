@@ -39,26 +39,56 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
   /*
    * The contents of this actor is just a suggestion, you can implement it in any way you like.
    */
-  
+
   var kv = Map.empty[String, String]
   // a map from secondary replicas to replicators
   var secondaries = Map.empty[ActorRef, ActorRef]
   // the current set of replicators
   var replicators = Set.empty[ActorRef]
 
+  var expectedSeq: Long = 0
+
+  override def preStart() {
+    arbiter ! Join
+  }
+
+
   def receive = {
-    case JoinedPrimary   => context.become(leader)
+    case JoinedPrimary => context.become(leader)
     case JoinedSecondary => context.become(replica)
   }
 
   /* TODO Behavior for  the leader role. */
   val leader: Receive = {
-    case _ =>
+    case Insert(key, value, id) =>
+      kv = kv.updated(key, value)
+      // replicate
+      // persist
+      sender ! new OperationAck(id)
+    case Remove(key, id) =>
+      kv = kv - key
+      // replicate
+      // persist
+      sender ! new OperationAck(id)
+    case Get(key, id) =>
+      sender ! new GetResult(key, kv.get(key), id)
   }
 
   /* TODO Behavior for the replica role. */
   val replica: Receive = {
-    case _ =>
+    case Get(key, id) =>
+      sender ! new GetResult(key, kv.get(key), id)
+    case Snapshot(key, valueOption, seq) =>
+      if (seq < expectedSeq)
+        sender ! SnapshotAck(key, seq)
+      if (seq == expectedSeq) {
+        valueOption match {
+          case None => kv = kv - key
+          case Some(value) => kv = kv.updated(key, value)
+        }
+        sender ! SnapshotAck(key, seq)
+        expectedSeq = seq + 1
+      }
   }
 
 }
