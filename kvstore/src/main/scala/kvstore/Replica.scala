@@ -1,17 +1,16 @@
 package kvstore
 
-import akka.actor.{ OneForOneStrategy, Props, ActorRef, Actor }
+import akka.actor._
 import kvstore.Arbiter._
 import scala.collection.immutable.Queue
 import akka.actor.SupervisorStrategy.Restart
 import scala.annotation.tailrec
 import akka.pattern.{ ask, pipe }
-import akka.actor.Terminated
 import scala.concurrent.duration._
-import akka.actor.PoisonPill
-import akka.actor.OneForOneStrategy
-import akka.actor.SupervisorStrategy
 import akka.util.Timeout
+import scala.concurrent.duration._
+import scala.Some
+import akka.actor.OneForOneStrategy
 
 object Replica {
   sealed trait Operation {
@@ -30,7 +29,7 @@ object Replica {
   def props(arbiter: ActorRef, persistenceProps: Props): Props = Props(new Replica(arbiter, persistenceProps))
 }
 
-class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
+class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor with ActorLogging {
   import Replica._
   import Replicator._
   import Persistence._
@@ -47,11 +46,15 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
   var replicators = Set.empty[ActorRef]
 
   var expectedSeq = 0L
+  override val supervisorStrategy = OneForOneStrategy() {
+    case _: Exception => Restart
+  }
+  val persistence = context.actorOf(persistenceProps)
+  val persistTimeout = 100.milliseconds
 
   override def preStart() {
     arbiter ! Join
   }
-
 
   def receive = {
     case JoinedPrimary => context.become(leader)
@@ -86,9 +89,27 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
           case None => kv = kv - key
           case Some(value) => kv = kv.updated(key, value)
         }
-        sender ! SnapshotAck(key, seq)
-        expectedSeq = seq + 1
+        val persist = new Persist(key, valueOption, seq)
+        persistence ! persist
+        context.setReceiveTimeout(persistTimeout)
+        context.become(replicaWaitingForPersistence(persist, sender))
       }
   }
 
+  def replicaWaitingForPersistence(persist: Persist, replicator: ActorRef): Receive = {
+    case Get(key, id) =>
+      sender ! new GetResult(key, kv.get(key), id)
+    case Persisted(key, id) =>
+      if (id == persist.id) {
+        context.setReceiveTimeout(Duration.Undefined)
+        replicator ! SnapshotAck(key, id)
+        expectedSeq = id + 1
+        context.become(replica, discardOld = true)
+      } else {
+        log.warning(s"Got Persisted message for different (key, id), got ($key, $id), expected (?, ${persist.id}})")
+      }
+    case ReceiveTimeout =>
+      context.setReceiveTimeout(persistTimeout)
+      persistence ! persist
+  }
 }
