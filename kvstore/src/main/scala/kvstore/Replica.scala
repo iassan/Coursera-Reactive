@@ -46,7 +46,7 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
   // the current set of replicators
   var replicators = Set.empty[ActorRef]
 
-  var expectedSeq: Long = 0
+  var expectedSeq = 0L
 
   override def preStart() {
     arbiter ! Join
