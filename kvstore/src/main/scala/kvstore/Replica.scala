@@ -4,10 +4,6 @@ import akka.actor._
 import kvstore.Arbiter._
 import scala.collection.immutable.Queue
 import akka.actor.SupervisorStrategy.Restart
-import scala.annotation.tailrec
-import akka.pattern.{ ask, pipe }
-import scala.concurrent.duration._
-import akka.util.Timeout
 import scala.concurrent.duration._
 import scala.Some
 import akka.actor.OneForOneStrategy
@@ -34,7 +30,6 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor with
   import Replica._
   import Replicator._
   import Persistence._
-  import context.dispatcher
 
   /*
    * The contents of this actor is just a suggestion, you can implement it in any way you like.
@@ -47,6 +42,8 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor with
   var replicators = Set.empty[ActorRef]
   // key -> (id, where to send confirmation about operation success/failure (can be null), is persisted (are we NOT waiting for persistence), set of replicators, from which we're still waiting for a reply, when timeout is due)
   var acks = Map.empty[String, (Long, ActorRef, Boolean, Set[ActorRef], Long)]
+
+  var operations = Queue.empty[Operation]
 
   var expectedSeq = 0L
   override val supervisorStrategy = OneForOneStrategy() {
@@ -84,12 +81,16 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor with
       sender ! new GetResult(key, kv.get(key), id)
       checkForTimeouts
     case Replicated(key, id) =>
-      acks = acks.updated(key, (acks(key)._1, acks(key)._2, acks(key)._3, acks(key)._4 - sender, acks(key)._5))
-      sendAckIfPossible(key)
+      if (acks.contains(key)) {
+        acks = acks.updated(key, (acks(key)._1, acks(key)._2, acks(key)._3, acks(key)._4 - sender, acks(key)._5))
+        sendAckIfPossible(key)
+      }
       checkForTimeouts
     case Persisted(key, id) =>
-      acks = acks.updated(key, (acks(key)._1, acks(key)._2, true, acks(key)._4, acks(key)._5))
-      sendAckIfPossible(key)
+      if (acks.contains(key)) {
+        acks = acks.updated(key, (acks(key)._1, acks(key)._2, true, acks(key)._4, acks(key)._5))
+        sendAckIfPossible(key)
+      }
       checkForTimeouts
     case Replicas(replicas) =>
       processNewReplicasSet(replicas)
@@ -99,7 +100,7 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor with
   }
 
   private def sendAckIfPossible(key: String) = {
-    if (acks(key)._3 && acks(key)._4.isEmpty) {
+    if (acks.contains(key) && acks(key)._3 && acks(key)._4.isEmpty) {
       if (acks(key)._2 != null)
         acks(key)._2 ! OperationAck(acks(key)._1)
       acks = acks - key
@@ -122,6 +123,7 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor with
         }
       case Get(_, _) =>
     }
+    operations = operations :+ operation
   }
 
   private def initAck(key: String, id: Long, sendAckTo: ActorRef, waitForPersistence: Boolean) = {
@@ -147,16 +149,24 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor with
 
   private def processNewReplicasSet(replicas: Set[ActorRef]) = {
     val replicasToDrop = secondaries.keySet -- replicas
+//    log.info(s"replicasToDrop: $replicasToDrop")
     for {
       key <- acks.keySet
     } yield {
       val v = acks(key)
-      acks = acks.updated(key, (v._1, v._2, v._3, v._4 -- replicasToDrop, v._5))
+      acks = acks.updated(key, (v._1, v._2, v._3, v._4 -- replicasToDrop.map(secondaries(_)), v._5))
+//      log.info(s"removing waiting for acks from removed replicas, key: $key, persistence: ${v._3}, replicas: ${v._4.size}")
+//      for {
+//        replica <- v._4
+//      } yield {
+//        log.info(s"outstanding replica: $replica")
+//      }
       sendAckIfPossible(key)
     }
     for {
       replica <- replicasToDrop
     } yield {
+      replicators = replicators - secondaries(replica)
       secondaries(replica) ! PoisonPill
       secondaries - replica
     }
@@ -168,15 +178,24 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor with
       val replicator = context.actorOf(Replicator.props(replica))
       replicators = replicators + replicator
       secondaries = secondaries.updated(replica, replicator)
+//      log.info(s"Adding new replica: $replica, replicator: $replicator")
       for {
-        (k, v) <- kv
+        operation <- operations
       } yield {
-        if (acks.contains(k)) {
-          val av = acks(k)
-          replicator ! Insert(k, v, av._1)
-          acks = acks.updated(k, (av._1, av._2, av._3, av._4 + replica, av._5))
-        } else {
-          replicator ! Insert(k, v, -1L)  // I don't care about the id, I'm not interested in reply anyway
+//        log.info(s"Replaying operation $operation for replica $replica, replicator: $replicator")
+        operation match {
+          case Insert(key, value, id) =>
+            replicator ! Replicate(key, Some(value), id)
+            if (acks.contains(key) && acks(key)._1 == id) {
+              val v = acks(key)
+              acks = acks.updated(key, (v._1, v._2, v._3, v._4 + replicator, v._5))
+            }
+          case Remove(key, id) =>
+            replicator ! Replicate(key, None, id)
+            if (acks.contains(key) && acks(key)._1 == id) {
+              val v = acks(key)
+              acks = acks.updated(key, (v._1, v._2, v._3, v._4 + replicator, v._5))
+            }
         }
       }
     }
