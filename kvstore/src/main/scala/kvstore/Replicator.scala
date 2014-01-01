@@ -16,15 +16,15 @@ object Replicator {
 
 class Replicator(val replica: ActorRef) extends Actor with ActorLogging {
   import Replicator._
-  import Replica._
-  import context.dispatcher
 
   /*
    * The contents of this actor is just a suggestion, you can implement it in any way you like.
    */
 
   // map from sequence number to pair of sender and request
-  var acks = Map.empty[Long, (ActorRef, Replicate)]
+  //var acks = Map.empty[Long, (ActorRef, Replicate)]
+  // seq -> (key, id)
+  var acks = Map.empty[Long, (String, Long)]
   // a sequence of not-yet-sent snapshots (you can disregard this if not implementing batching)
   var pending = Vector.empty[Snapshot]
 
@@ -42,7 +42,8 @@ class Replicator(val replica: ActorRef) extends Actor with ActorLogging {
     case Replicate(key, valueOption, id) =>
       val snapshot = new Snapshot(key, valueOption, nextSeq)
       //pending = pending :+ snapshot
-      acks = acks.updated(snapshot.seq, (null, new Replicate(key, valueOption, id)))
+      //acks = acks.updated(snapshot.seq, (null, new Replicate(key, valueOption, id)))
+      acks = acks.updated(snapshot.seq, (key, id))
       replica ! snapshot
       context.setReceiveTimeout(receiveTimeout)
       context.become(waitingForAck(snapshot), discardOld = true)
@@ -55,14 +56,17 @@ class Replicator(val replica: ActorRef) extends Actor with ActorLogging {
 
   def waitingForAck(snapshot: Snapshot): Receive = {
     case Replicate(key, valueOption, id) =>
-      pending = pending :+ new Snapshot(key, valueOption, nextSeq)
+      val snapshot = new Snapshot(key, valueOption, nextSeq)
+      pending = pending :+ snapshot
+      acks = acks.updated(snapshot.seq, (key, id))
     case SnapshotAck(key, seq) =>
-      acks = acks.updated(seq, (sender, acks(seq)._2))
-      context.parent ! new Replicated(key, acks(seq)._2.id)
+      //acks = acks.updated(seq, (sender, acks(seq)._2))
+      context.parent ! new Replicated(key, acks(seq)._2)
+      acks = acks - seq
       if (pending.nonEmpty) {
         val nextSnapshot = pending.head
         pending = pending.tail
-        acks = acks.updated(nextSnapshot.seq, (null, new Replicate(key, nextSnapshot.valueOption, acks(nextSnapshot.seq)._2.id)))
+        //acks = acks.updated(nextSnapshot.seq, (null, new Replicate(key, nextSnapshot.valueOption, acks(nextSnapshot.seq)._2.id)))
         replica ! nextSnapshot
         context.setReceiveTimeout(receiveTimeout)
         context.become(waitingForAck(nextSnapshot), discardOld = true)
@@ -73,5 +77,4 @@ class Replicator(val replica: ActorRef) extends Actor with ActorLogging {
     case ReceiveTimeout =>
       replica ! snapshot
   }
-
 }
