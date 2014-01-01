@@ -51,7 +51,7 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor with
   override val supervisorStrategy = OneForOneStrategy() {
     case _: Exception => Restart
   }
-  val persistence = context.actorOf(persistenceProps)
+  val persistence = context.actorOf(PersistenceProxy.props(persistenceProps))
   val persistTimeout = 100.milliseconds
 
   override def preStart() {
@@ -68,74 +68,22 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor with
     case Insert(key, value, id) =>
       kv = kv.updated(key, value)
       initAck(key, id, sender, waitForPersistence = true)
-      val insert = Insert(key, value, id)
-      replicateOperation(insert)
-      var queue = Queue.empty[(Persist, ActorRef)]
-      val persist = new Persist(key, Some(value), id)
-      persistence ! persist
-      queue = queue :+ (persist, sender)
-      context.setReceiveTimeout(persistTimeout)
-      acks = acks.updated(key, (id, sender, false, replicators))
-      context.become(leaderWaitingForAck(queue), discardOld = true)
+      replicateOperation(Insert(key, value, id))
+      persistence ! Persist(key, Some(value), id)
     case Remove(key, id) =>
       kv = kv - key
       initAck(key, id, sender, waitForPersistence = true)
-      val remove = Remove(key, id)
-      replicateOperation(remove)
-      // replicate
-      var queue = Queue.empty[(Persist, ActorRef)]
-      val persist = new Persist(key, None, id)
-      persistence ! persist
-      queue = queue :+ (persist, sender)
-      context.setReceiveTimeout(persistTimeout)
-      acks = acks.updated(key, (id, sender, false, replicators))
-      context.become(leaderWaitingForAck(queue), discardOld = true)
+      replicateOperation(Remove(key, id))
+      persistence ! Persist(key, None, id)
     case Get(key, id) =>
       sender ! new GetResult(key, kv.get(key), id)
     case Replicated(key, id) =>
       acks = acks.updated(key, (acks(key)._1, acks(key)._2, acks(key)._3, acks(key)._4 - sender))
       sendAckIfPossible(key)
-    //case Replicas(replicas) =>
-
-  }
-
-  def leaderWaitingForAck(persistRequestQueue: Queue[(Persist, ActorRef)]): Receive = {
-    case Insert(key, value, id) =>
-      kv = kv.updated(key, value)
-      initAck(key, id, sender, waitForPersistence = true)
-      val insert = Insert(key, value, id)
-      replicateOperation(insert)
-      val persist = new Persist(key, Some(value), id)
-      val queue = persistRequestQueue :+ (persist, sender)
-      context.become(leaderWaitingForAck(queue))
-    case Remove(key, id) =>
-      kv = kv - key
-      initAck(key, id, sender, waitForPersistence = true)
-      val remove = Remove(key, id)
-      replicateOperation(remove)
-      val persist = new Persist(key, None, id)
-      val queue = persistRequestQueue :+ (persist, sender)
-      context.become(leaderWaitingForAck(queue))
-    case Get(key, id) =>
-      sender ! new GetResult(key, kv.get(key), id)
     case Persisted(key, id) =>
       acks = acks.updated(key, (acks(key)._1, acks(key)._2, true, acks(key)._4))
       sendAckIfPossible(key)
-      context.setReceiveTimeout(Duration.Undefined)
-      if (persistRequestQueue.tail.isEmpty) {
-        context.become(leader, discardOld = true)
-      } else {
-        val next = persistRequestQueue.tail.head
-        persistence ! next._1
-        context.setReceiveTimeout(persistTimeout)
-        context.become(leaderWaitingForAck(persistRequestQueue.tail), discardOld = true)
-      }
-    case Replicated(key, id) =>
-      acks = acks.updated(key, (acks(key)._1, acks(key)._2, acks(key)._3, acks(key)._4 - sender))
-      sendAckIfPossible(key)
     case ReceiveTimeout =>
-      context.setReceiveTimeout(persistTimeout)
-      persistence ! persistRequestQueue.head._1
     //case Replicas(replicas) =>
 
   }
@@ -162,6 +110,7 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor with
         } yield {
           replicator ! Replicate(key, None, id)
         }
+      case Get(_, _) =>
     }
   }
 
