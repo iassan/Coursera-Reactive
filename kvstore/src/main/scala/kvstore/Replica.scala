@@ -11,6 +11,7 @@ import akka.util.Timeout
 import scala.concurrent.duration._
 import scala.Some
 import akka.actor.OneForOneStrategy
+import java.util.Date
 
 object Replica {
   sealed trait Operation {
@@ -44,8 +45,8 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor with
   var secondaries = Map.empty[ActorRef, ActorRef]
   // the current set of replicators
   var replicators = Set.empty[ActorRef]
-  // key -> (id, where to send confirmation about operation success/failure (can be null), is persisted (are we NOT waiting for persistence), set of replicators, from which we're still waiting for a reply)
-  var acks = Map.empty[String, (Long, ActorRef, Boolean, Set[ActorRef])]
+  // key -> (id, where to send confirmation about operation success/failure (can be null), is persisted (are we NOT waiting for persistence), set of replicators, from which we're still waiting for a reply, when timeout is due)
+  var acks = Map.empty[String, (Long, ActorRef, Boolean, Set[ActorRef], Long)]
 
   var expectedSeq = 0L
   override val supervisorStrategy = OneForOneStrategy() {
@@ -59,7 +60,9 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor with
   }
 
   def receive = {
-    case JoinedPrimary => context.become(leader)
+    case JoinedPrimary =>
+      context.setReceiveTimeout(persistTimeout)
+      context.become(leader)
     case JoinedSecondary => context.become(replica)
   }
 
@@ -67,25 +70,32 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor with
   def leader: Receive = {
     case Insert(key, value, id) =>
       kv = kv.updated(key, value)
+      checkForTimeouts
       initAck(key, id, sender, waitForPersistence = true)
       replicateOperation(Insert(key, value, id))
       persistence ! Persist(key, Some(value), id)
     case Remove(key, id) =>
       kv = kv - key
+      checkForTimeouts
       initAck(key, id, sender, waitForPersistence = true)
       replicateOperation(Remove(key, id))
       persistence ! Persist(key, None, id)
     case Get(key, id) =>
       sender ! new GetResult(key, kv.get(key), id)
+      checkForTimeouts
     case Replicated(key, id) =>
-      acks = acks.updated(key, (acks(key)._1, acks(key)._2, acks(key)._3, acks(key)._4 - sender))
+      acks = acks.updated(key, (acks(key)._1, acks(key)._2, acks(key)._3, acks(key)._4 - sender, acks(key)._5))
       sendAckIfPossible(key)
+      checkForTimeouts
     case Persisted(key, id) =>
-      acks = acks.updated(key, (acks(key)._1, acks(key)._2, true, acks(key)._4))
+      acks = acks.updated(key, (acks(key)._1, acks(key)._2, true, acks(key)._4, acks(key)._5))
       sendAckIfPossible(key)
+      checkForTimeouts
+    case Replicas(replicas) =>
+      processNewReplicasSet(replicas)
+      checkForTimeouts
     case ReceiveTimeout =>
-    //case Replicas(replicas) =>
-
+      checkForTimeouts
   }
 
   private def sendAckIfPossible(key: String) = {
@@ -115,7 +125,61 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor with
   }
 
   private def initAck(key: String, id: Long, sendAckTo: ActorRef, waitForPersistence: Boolean) = {
-    acks = acks.updated(key, (id, sendAckTo, !waitForPersistence, replicators))
+    acks = acks.updated(key, (id, sendAckTo, !waitForPersistence, replicators, new Date().getTime + 1000))
+  }
+
+  private def checkForTimeouts = {
+    val now = new Date().getTime
+    var keysToRemove = Set.empty[String]
+    for {
+      (k, v) <- acks
+      if v._5 < now
+    } yield {
+      keysToRemove = keysToRemove + k
+      v._2 ! OperationFailed(v._1)
+    }
+    for {
+      k <- keysToRemove
+    } yield {
+      acks = acks - k
+    }
+  }
+
+  private def processNewReplicasSet(replicas: Set[ActorRef]) = {
+    val replicasToDrop = secondaries.keySet -- replicas
+    for {
+      key <- acks.keySet
+    } yield {
+      val v = acks(key)
+      acks = acks.updated(key, (v._1, v._2, v._3, v._4 -- replicasToDrop, v._5))
+      sendAckIfPossible(key)
+    }
+    for {
+      replica <- replicasToDrop
+    } yield {
+      secondaries(replica) ! PoisonPill
+      secondaries - replica
+    }
+
+    val newReplicas = replicas - self -- secondaries.keySet
+    for {
+      replica <- newReplicas
+    } yield {
+      val replicator = context.actorOf(Replicator.props(replica))
+      replicators = replicators + replicator
+      secondaries = secondaries.updated(replica, replicator)
+      for {
+        (k, v) <- kv
+      } yield {
+        if (acks.contains(k)) {
+          val av = acks(k)
+          replicator ! Insert(k, v, av._1)
+          acks = acks.updated(k, (av._1, av._2, av._3, av._4 + replica, av._5))
+        } else {
+          replicator ! Insert(k, v, -1L)  // I don't care about the id, I'm not interested in reply anyway
+        }
+      }
+    }
   }
 
   /* TODO Behavior for the replica role. */
