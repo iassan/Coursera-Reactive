@@ -196,6 +196,8 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor with
               val v = acks(key)
               acks = acks.updated(key, (v._1, v._2, v._3, v._4 + replicator, v._5))
             }
+          case Get(key, id) =>
+            log.error(s"Got Get($key, $id) operation to replicate...")
         }
       }
     }
@@ -215,25 +217,50 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor with
         }
         val persist = new Persist(key, valueOption, seq)
         persistence ! persist
-        context.setReceiveTimeout(persistTimeout)
-        context.become(replicaWaitingForPersistence(persist, sender))
+        //context.setReceiveTimeout(persistTimeout)
+        context.become(replicaWaitingForPersistence(Queue(persist), sender), discardOld = false)
       }
   }
 
-  def replicaWaitingForPersistence(persist: Persist, replicator: ActorRef): Receive = {
+  def replicaWaitingForPersistence(persistQueue: Queue[Persist], replicator: ActorRef): Receive = {
     case Get(key, id) =>
       sender ! new GetResult(key, kv.get(key), id)
     case Persisted(key, id) =>
-      if (id == persist.id) {
-        context.setReceiveTimeout(Duration.Undefined)
+      // wysyłamy potwierdzenie z powrotem i bierzemy kolejny element z kolejki
+      // problem: być może ten element trzeba odrzucić i od razu zająć się kolejnym... rekurencyjnie
+      if (id == persistQueue.head.id) {
+        //context.setReceiveTimeout(Duration.Undefined)
         replicator ! SnapshotAck(key, id)
         expectedSeq = id + 1
-        context.become(replica, discardOld = true)
+        handleQueue(persistQueue.tail, replicator)
       } else {
-        log.warning(s"Got Persisted message for different (key, id), got ($key, $id), expected (?, ${persist.id}})")
+        log.warning(s"Got Persisted message for different (key, id), got ($key, $id), expected (?, ${persistQueue.head.id}})")
       }
-    case ReceiveTimeout =>
-      context.setReceiveTimeout(persistTimeout)
-      persistence ! persist
+    case Snapshot(key, valueOption, seq) =>
+      // nie mogę od razu zaaplikować zmian, bo nie wiem czy się seq zgadza, będę to wiedział dopiero jak dotrę do tego elementu w kolejce
+      val persist = new Persist(key, valueOption, seq)
+      context.become(replicaWaitingForPersistence(persistQueue :+ persist, replicator))
+  }
+
+  private def handleQueue(persistQueue: Queue[Persist], replicator: ActorRef): Unit = {
+    if (persistQueue.isEmpty) {
+      context.become(replica)
+    } else {
+      val persist = persistQueue.head
+      if (persist.id < expectedSeq) {
+        replicator ! SnapshotAck(persist.key, persist.id)
+        handleQueue(persistQueue.tail, replicator)
+      } else {
+        if (persist.id == expectedSeq) {
+          persist.valueOption match {
+            case None => kv = kv - persist.key
+            case Some(value) => kv = kv.updated(persist.key, value)
+          }
+          persistence ! persist
+          //context.setReceiveTimeout(persistTimeout)
+          context.become(replicaWaitingForPersistence(persistQueue, replicator))
+        }
+      }
+    }
   }
 }

@@ -4,17 +4,22 @@ import akka.actor._
 import scala.concurrent.duration._
 
 object Replicator {
+
   case class Replicate(key: String, valueOption: Option[String], id: Long)
+
   case class Replicated(key: String, id: Long)
 
   case class Snapshot(key: String, valueOption: Option[String], seq: Long)
+
   case class SnapshotAck(key: String, seq: Long)
 
   def props(replica: ActorRef): Props = Props(new Replicator(replica))
+
   val receiveTimeout = 100.milliseconds
 }
 
 class Replicator(val replica: ActorRef) extends Actor with ActorLogging {
+
   import Replicator._
 
   /*
@@ -29,6 +34,7 @@ class Replicator(val replica: ActorRef) extends Actor with ActorLogging {
   var pending = Vector.empty[Snapshot]
 
   var _seqCounter = 0L
+
   def nextSeq = {
     val ret = _seqCounter
     _seqCounter += 1
@@ -46,7 +52,7 @@ class Replicator(val replica: ActorRef) extends Actor with ActorLogging {
       acks = acks.updated(snapshot.seq, (key, id))
       replica ! snapshot
       context.setReceiveTimeout(receiveTimeout)
-      context.become(waitingForAck(snapshot), discardOld = true)
+      context.become(waitingForAck(snapshot), discardOld = false)
     case SnapshotAck(key, seq) =>
       log.warning(s"Got SnapshotAck when not expecting one, key: $key, seq: $seq")
     case ReceiveTimeout =>
@@ -61,18 +67,22 @@ class Replicator(val replica: ActorRef) extends Actor with ActorLogging {
       acks = acks.updated(snapshot.seq, (key, id))
     case SnapshotAck(key, seq) =>
       //acks = acks.updated(seq, (sender, acks(seq)._2))
-      context.parent ! new Replicated(key, acks(seq)._2)
-      acks = acks - seq
-      if (pending.nonEmpty) {
-        val nextSnapshot = pending.head
-        pending = pending.tail
-        //acks = acks.updated(nextSnapshot.seq, (null, new Replicate(key, nextSnapshot.valueOption, acks(nextSnapshot.seq)._2.id)))
-        replica ! nextSnapshot
-        context.setReceiveTimeout(receiveTimeout)
-        context.become(waitingForAck(nextSnapshot), discardOld = true)
+      if (acks.contains(seq)) {
+        context.parent ! new Replicated(key, acks(seq)._2)
+        acks = acks - seq
+        if (pending.nonEmpty) {
+          val nextSnapshot = pending.head
+          pending = pending.tail
+          //acks = acks.updated(nextSnapshot.seq, (null, new Replicate(key, nextSnapshot.valueOption, acks(nextSnapshot.seq)._2.id)))
+          replica ! nextSnapshot
+          context.setReceiveTimeout(receiveTimeout)
+          context.become(waitingForAck(nextSnapshot))
+        } else {
+          context.setReceiveTimeout(Duration.Undefined)
+          context.unbecome()
+        }
       } else {
-        context.setReceiveTimeout(Duration.Undefined)
-        context.become(waitingForTask, discardOld = true)
+        log.warning(s"Got SnapshotAck($key, $seq) which was not expected")
       }
     case ReceiveTimeout =>
       replica ! snapshot
