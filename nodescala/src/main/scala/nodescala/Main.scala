@@ -54,5 +54,4 @@ object Main {
         println("Bye!")
     }
   }
-
 }

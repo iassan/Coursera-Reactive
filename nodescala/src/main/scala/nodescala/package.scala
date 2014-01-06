@@ -29,9 +29,10 @@ package object nodescala {
       * The values in the list are in the same order as corresponding futures `fs`.
       * If any of the futures `fs` fails, the resulting future also fails.
       */
-    def all[T](fs: List[Future[T]]): Future[List[T]] =
-    async {
-      fs.map(Await.result(_, 0 seconds))
+    def all[T](fs: List[Future[T]]): Future[List[T]] = {
+      async {
+        fs.map(Await.result(_, Duration.Inf))
+      }
     }
 
     /** Given a list of futures `fs`, returns the future holding the value of the future from `fs` that completed first.
@@ -51,7 +52,7 @@ package object nodescala {
 
     /** Returns a future with a unit value that is completed after time `t`.
       */
-    def delay(t: Duration): Future[Unit] = async {
+    def delay(t: Duration): Future[Unit] = Future {
       Thread.sleep(t.toMillis)
     }
 
@@ -65,20 +66,7 @@ package object nodescala {
       */
     def run()(f: CancellationToken => Future[Unit]): Subscription = {
       val cts = CancellationTokenSource()
-      val fut = f(cts.cancellationToken)
-      Future {
-        while (!cts.cancellationToken.isCancelled && !fut.isCompleted)
-          Await.ready(delay(1 second), 0 seconds)
-//        if (!fut.isCompleted) {
-//          fut.fa
-//        }
-      }
-      /* mam jedno future
-       teraz muszę to spiąć z nieskończoną pętlą, z której są dwa wyjścia:
-      1. cts.cancellationToken.isCancelled == true
-      2. fut.isCompleted == true
-      W pętli po prostu czekam np. 1 sekundę
-      */
+      f(cts.cancellationToken)
       cts
     }
 
@@ -117,7 +105,7 @@ package object nodescala {
             try {
               p.success(cont(f))
             } catch {
-              case NonFatal(t) => p failure t
+              case NonFatal(t) => p.failure(t)
             }
           case Failure(t) => p.failure(t)
         }
@@ -139,7 +127,7 @@ package object nodescala {
           case Success(s) => try {
             p.success(cont(a))
           } catch {
-            case NonFatal(t) => p failure t
+            case NonFatal(t) => p.failure(t)
           }
           case Failure(t) => p.failure(t)
         }

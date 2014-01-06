@@ -8,6 +8,7 @@ import java.util.concurrent.{ThreadPoolExecutor, TimeUnit, LinkedBlockingQueue}
 import com.sun.net.httpserver.{HttpExchange, HttpHandler, HttpServer}
 import java.net.InetSocketAddress
 import scala.util.{Failure, Success, Try}
+import scala.concurrent.duration.Duration
 
 /** Contains utilities common to the NodeScala© framework.
   */
@@ -46,7 +47,7 @@ trait NodeScala {
     * @return               a subscription that can stop the server and all its asynchronous operations *entirely*.
     */
   def start(relativePath: String)(handler: Request => Response): Subscription = {
-    val listener = new Default(8191).createListener(relativePath)
+    val listener = createListener(relativePath)
     val listenerSubscription = listener.start()
     def responseLoop(ct: CancellationToken): Future[Unit] = {
       //      async {
