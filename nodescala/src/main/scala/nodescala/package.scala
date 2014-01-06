@@ -109,8 +109,21 @@ package object nodescala {
       * The function `cont` is called only after the current future completes.
       * The resulting future contains a value returned by `cont`.
       */
-    def continueWith[S](cont: Future[T] => S): Future[S] = async {
-      cont(f)
+    def continueWith[S](cont: Future[T] => S): Future[S] = {
+      val p = Promise[S]()
+      def x(a: Try[T]): Unit = {
+        a match {
+          case Success(s) =>
+            try {
+              p.success(cont(f))
+            } catch {
+              case NonFatal(t) => p failure t
+            }
+          case Failure(t) => p.failure(t)
+        }
+      }
+      f.onComplete(x)
+      p.future
     }
 
     /** Continues the computation of this future by taking the result
@@ -121,20 +134,19 @@ package object nodescala {
       */
     def continue[S](cont: Try[T] => S): Future[S] = {
       val p = Promise[S]()
-      def x(p: Promise[S], cont: Try[T] => S)(t: Try[T]): Unit = {
-        t match {
+      def x(a: Try[T]): Unit = {
+        a match {
           case Success(s) => try {
-            p.success(cont(t))
+            p.success(cont(a))
           } catch {
             case NonFatal(t) => p failure t
           }
           case Failure(t) => p.failure(t)
         }
       }
-      f.onComplete(x(p, cont))
+      f.onComplete(x)
       p.future
     }
-
   }
 
   /** Subscription objects are used to be able to unsubscribe

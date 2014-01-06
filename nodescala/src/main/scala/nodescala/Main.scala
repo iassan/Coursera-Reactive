@@ -15,7 +15,7 @@ object Main {
     //    and have the response return headers of the request
     val myServer = new NodeScala.Default(8191)
     def handler(request: Request): Response = {
-      def m(p: (String, List[String])): String = s"key: $p._1, value: " + p._2.mkString("[", ",", "]")
+      def m(p: (String, List[String])): String = s"key: ${p._1}, value: " + p._2.mkString("[", ",", "]")
       request.toList.map(m).iterator
     }
     val myServerSubscription = myServer.start("/test")(handler)
@@ -43,12 +43,15 @@ object Main {
     // TO IMPLEMENT
     // 4. create a future that completes when either 10 seconds elapse
     //    or the user enters some text and presses ENTER
-    val terminationRequested: Future[String] = ???
+    val terminationRequested: Future[String] = Future.any(List(userInterrupted, timeOut))
 
     // TO IMPLEMENT
     // 5. unsubscribe from the server
     terminationRequested onSuccess {
-      case msg => myServerSubscription.unsubscribe()
+      case msg =>
+        println(s"Message reads: $msg")
+        myServerSubscription.unsubscribe()
+        println("Bye!")
     }
   }
 
