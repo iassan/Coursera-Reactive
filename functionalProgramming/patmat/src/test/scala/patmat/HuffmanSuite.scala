@@ -30,7 +30,11 @@ class HuffmanSuite extends FunSuite {
     assert(string2Chars("hello, world") === List('h', 'e', 'l', 'l', 'o', ',', ' ', 'w', 'o', 'r', 'l', 'd'))
   }
 
-  test("makeOrderedLeafList for some frequency table") {
+	test("times") {
+		assert(times(string2Chars("babajaga")) === List(('j', 1), ('g', 1), ('b', 2), ('a', 4)))
+	}
+
+	test("makeOrderedLeafList for some frequency table") {
     assert(makeOrderedLeafList(List(('t', 2), ('e', 1), ('x', 3))) === List(Leaf('e',1), Leaf('t',2), Leaf('x',3)))
   }
 
@@ -38,6 +42,23 @@ class HuffmanSuite extends FunSuite {
     val leaflist = List(Leaf('e', 1), Leaf('t', 2), Leaf('x', 4))
     assert(combine(leaflist) === List(Fork(Leaf('e',1),Leaf('t',2),List('e', 't'),3), Leaf('x',4)))
   }
+
+	test("decode my message") {
+		val codeTree = createCodeTree(string2Chars("baba jaga"))
+		//println("codeTree: " + codeTree)
+		val code: List[Bit] = List(1,0,0,1,0,0,1,1,0,1,1,1,0,0,1,1,1,1,0)
+		assert(decode(codeTree, code) === List('b','a','b','a',' ','j','a','g','a'))
+	}
+
+	test("decode secret message") {
+		assert(decodedSecret === List('h', 'u', 'f', 'f', 'm', 'a', 'n', 'e', 's', 't', 'c', 'o', 'o', 'l'))
+	}
+
+	test("encode \"baba jaga\"") {
+		val codeTree = createCodeTree(string2Chars("baba jaga"))
+		val message = List('b','a','b','a',' ','j','a','g','a')
+		assert(encode(codeTree)(message) === List(1,0,0,1,0,0,1,1,0,1,1,1,0,0,1,1,1,1,0))
+	}
 
   test("decode and encode a very short text should be identity") {
     new TestTrees {

@@ -103,6 +103,12 @@ class AnagramsSuite extends FunSuite {
       List("Linux", "rulez")
     )
     assert(sentenceAnagrams(sentence).toSet === anas.toSet)
-  }  
+  }
+
+//	test("sentenceAnagrams: reuxz") {
+//		val sentence = List("reuxz")
+//		val anagrams = List(Nil)
+//		assert(sentenceAnagrams(sentence).toSet === anagrams.toSet)
+//	}
 
 }
